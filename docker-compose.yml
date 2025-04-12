@@ -21,3 +21,10 @@ services:
     command: ["3"]
     ports:
       - "5003:5000"
+
+  raft_node_4:                          # this is a new node to test if voting works when more than 2 nodes alive
+    build: .
+    container_name: raft_node_4
+    command: ["4"]
+    ports:
+      - "5004:5000"
