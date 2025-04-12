@@ -7,24 +7,32 @@ import sys
 
 app = Flask(__name__)
 
+NODES = 4  # change to add more nodes
+
 NODE_ID = int(sys.argv[1])
-PEERS = [f"http://raft_node_{i}:5000" for i in range(1, 4) if i != NODE_ID]
+PEERS = [f"http://raft_node_{i}:5000" for i in range(1, NODES + 1) if i != NODE_ID]
 STATE = "follower"
 CURRENT_TERM = 0
 VOTED_FOR = None
 LEADER = None
 lock = threading.Lock()
 
+print(f"[Node {NODE_ID}] Peers: {PEERS}")
+
 HEARTBEAT_INTERVAL = 2
-ELECTION_TIMEOUT = random.randint(5, 10)
+ELECTION_TIMEOUT = random.uniform(5, 10)  # staggered timeout per node
 last_heartbeat = time.monotonic()
 
 
 @app.route('/heartbeat', methods=['POST'])
 def heartbeat():
-    global last_heartbeat, CURRENT_TERM, LEADER, STATE
+    global last_heartbeat, CURRENT_TERM, LEADER, STATE, VOTED_FOR
     data = request.get_json()
     with lock:
+        if data['term'] > CURRENT_TERM:
+            CURRENT_TERM = data['term']
+            STATE = "follower"
+            VOTED_FOR = None
         if data['term'] >= CURRENT_TERM:
             CURRENT_TERM = data['term']
             last_heartbeat = time.monotonic()
@@ -38,12 +46,16 @@ def heartbeat():
 
 @app.route('/vote', methods=['POST'])
 def vote():
-    global VOTED_FOR, CURRENT_TERM
+    global VOTED_FOR, CURRENT_TERM, STATE, last_heartbeat
     data = request.get_json()
     with lock:
-        if (VOTED_FOR is None or VOTED_FOR == data['candidate_id']) and data['term'] >= CURRENT_TERM:
-            VOTED_FOR = data['candidate_id']
+        if data['term'] > CURRENT_TERM:
             CURRENT_TERM = data['term']
+            VOTED_FOR = None
+            STATE = "follower"
+        if (VOTED_FOR is None or VOTED_FOR == data['candidate_id']) and data['term'] == CURRENT_TERM:
+            VOTED_FOR = data['candidate_id']
+            last_heartbeat = time.monotonic()  # prevent immediate re-election
             print(f"[Node {NODE_ID}] Voting for {VOTED_FOR} in term {CURRENT_TERM}")
             return jsonify({"vote_granted": True})
     return jsonify({"vote_granted": False})
@@ -76,7 +88,7 @@ def send_heartbeat():
 
 
 def election_loop():
-    global last_heartbeat, CURRENT_TERM, STATE, VOTED_FOR, LEADER, ELECTION_TIMEOUT
+    global last_heartbeat, CURRENT_TERM, STATE, VOTED_FOR, LEADER
     while True:
         time.sleep(1)
         start_election = False
@@ -84,15 +96,15 @@ def election_loop():
         with lock:
             time_since_heartbeat = time.monotonic() - last_heartbeat
             if STATE != "leader" and time_since_heartbeat > ELECTION_TIMEOUT:
-                print(f"[Node {NODE_ID}] No heartbeat received in {ELECTION_TIMEOUT}s. Starting election.")
+                print(f"[Node {NODE_ID}] No heartbeat received in {ELECTION_TIMEOUT:.2f}s. Starting election.")
                 STATE = "candidate"
                 CURRENT_TERM += 1
                 VOTED_FOR = NODE_ID
-                ELECTION_TIMEOUT = random.randint(5, 10)
-                start_election = True  # only do election if timed out
+                LEADER = None
+                start_election = True
 
         if start_election:
-            votes = 1  # Start with 1 (self vote)
+            votes = 1  # Vote for self
             for peer in PEERS:
                 try:
                     resp = requests.post(f"{peer}/vote", json={
@@ -105,9 +117,11 @@ def election_loop():
                     pass
 
             with lock:
+                print(f"[Node {NODE_ID}] Collected {votes} votes in term {CURRENT_TERM}")
                 if STATE == "candidate" and votes > len(PEERS) // 2:
                     STATE = "leader"
                     LEADER = NODE_ID
+                    last_heartbeat = time.monotonic()
                     print(f"[Node {NODE_ID}] Became leader for term {CURRENT_TERM} with {votes} votes.")
                 elif STATE == "candidate":
                     STATE = "follower"
