@@ -1,30 +1,69 @@
-version: '3.8'
+version: "3.8"
 
 services:
   raft_node_1:
     build: .
     container_name: raft_node_1
-    command: ["1"]
-    ports:
-      - "5001:5000"
+    environment:
+      - NODE_ID=1
+    networks:
+      - raft_net
 
   raft_node_2:
     build: .
     container_name: raft_node_2
-    command: ["2"]
-    ports:
-      - "5002:5000"
+    environment:
+      - NODE_ID=2
+    networks:
+      - raft_net
 
   raft_node_3:
     build: .
     container_name: raft_node_3
-    command: ["3"]
-    ports:
-      - "5003:5000"
+    environment:
+      - NODE_ID=3
+    networks:
+      - raft_net
 
-  raft_node_4:                          # this is a new node to test if voting works when more than 2 nodes alive
+  raft_node_4:
     build: .
     container_name: raft_node_4
-    command: ["4"]
-    ports:
-      - "5004:5000"
+    environment:
+      - NODE_ID=4
+    networks:
+      - raft_net
+
+  raft_node_5:
+    build: .
+    container_name: raft_node_5
+    environment:
+      - NODE_ID=5
+    networks:
+      - raft_net
+
+  raft_node_6:
+    build: .
+    container_name: raft_node_6
+    environment:
+      - NODE_ID=6
+    networks:
+      - raft_net
+
+  raft_node_7:
+    build: .
+    container_name: raft_node_7
+    environment:
+      - NODE_ID=7
+    networks:
+      - raft_net
+
+  raft_node_8:
+    build: .
+    container_name: raft_node_8
+    environment:
+      - NODE_ID=8
+    networks:
+      - raft_net
+
+networks:
+  raft_net:
