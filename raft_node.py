@@ -4,6 +4,17 @@ import time
 import random
 import requests
 import os
+import firebase_admin
+from firebase_admin import db,storage,credentials
+
+DBURL = os.getenv("DBURL")
+
+#firebase connection
+cred = credentials.Certificate("credentials.json")
+firebase_admin.initialize_app(cred,{'databaseURL':DBURL}) 
+
+#test if the db connection is working
+print(db)
 
 app = Flask(__name__)
 
