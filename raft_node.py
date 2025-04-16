@@ -183,7 +183,7 @@ def election_loop():
                 last_vote_time = now  # Reset vote timeout when starting election
                 print(f"[Node {NODE_ID}] Timeout. Starting election for term {CURRENT_TERM}")
                 last_heartbeat = now
-                ELECTION_TIMEOUT = random.randint(5, 10)
+                ELECTION_TIMEOUT = random.randint(5, 30)
 
             # Send vote requests
             for peer in PEERS:
