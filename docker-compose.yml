@@ -1,0 +1,77 @@
+version: "3.8"
+
+services:
+  raft_node_1:
+    build: .
+    container_name: raft_node_1
+    environment:
+      - NODE_ID=1
+      - DBURL=https://raft-3d-printer-default-rtdb.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_2:
+    build: .
+    container_name: raft_node_2
+    environment:
+      - NODE_ID=2
+      - DBURL=https://raft-3d-printer-node2.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_3:
+    build: .
+    container_name: raft_node_3
+    environment:
+      - NODE_ID=3
+      - DBURL=https://raft-3d-printer-node3.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_4:
+    build: .
+    container_name: raft_node_4
+    environment:
+      - NODE_ID=4
+      - DBURL=https://raft-3d-printer-node4.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_5:
+    build: .
+    container_name: raft_node_5
+    environment:
+      - NODE_ID=5
+      - DBURL=https://raft-3d-printer-node5.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_6:
+    build: .
+    container_name: raft_node_6
+    environment:
+      - NODE_ID=6
+      - DBURL=https://raft-3d-printer-node6.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_7:
+    build: .
+    container_name: raft_node_7
+    environment:
+      - NODE_ID=7
+      - DBURL=https://raft-3d-printer-node7.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+  raft_node_8:
+    build: .
+    container_name: raft_node_8
+    environment:
+      - NODE_ID=8
+      - DBURL=https://raft-3d-printer-node8.asia-southeast1.firebasedatabase.app/
+    networks:
+      - raft_net
+
+networks:
+  raft_net:
