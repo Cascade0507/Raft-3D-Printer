@@ -4,6 +4,27 @@ import time
 import random
 import requests
 import os
+import logging
+
+# --- Setup Logging ---
+node_id_str = os.getenv("NODE_ID", "unknown")
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_filename = f"{log_dir}/raft_node_{node_id_str}.log"
+
+logging.basicConfig(
+    filename=log_filename,
+    level=logging.INFO,
+    format=f"%(asctime)s [Node {node_id_str}] %(levelname)s: %(message)s"
+)
+
+# Optional: also log to stdout (for development/debugging)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter(f"%(asctime)s [Node {node_id_str}] %(levelname)s: %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+
 import firebase_admin
 from firebase_admin import db,storage,credentials
 
@@ -14,7 +35,7 @@ cred = credentials.Certificate("credentials.json")
 firebase_admin.initialize_app(cred,{'databaseURL':DBURL}) 
 
 #test if the db connection is working
-print(db)
+logging.info(db)
 
 app = Flask(__name__)
 
@@ -36,7 +57,7 @@ last_vote_time = 0  # Track when we last voted
 VOTE_TIMEOUT = 15   # Don't vote again for 15 seconds after voting
 lock = threading.Lock()
 
-print(f"[Node {NODE_ID}] Peers: {PEERS}")
+logging.info(f"[Node {NODE_ID}] Peers: {PEERS}")
 
 # Random election timeout (will change on each timeout)
 ELECTION_TIMEOUT = random.randint(5, 30)
@@ -48,11 +69,11 @@ def vote():
     data = request.get_json()
     term = data['term']
     candidate_id = data['candidate_id']
-
+    print(PEERS)
     with lock:
         # If this node is already a leader, inform the requester
         if STATE == "leader" and CURRENT_TERM >= term:
-            print(f"[Node {NODE_ID}] Rejecting vote request from {candidate_id} - I am already leader for term {CURRENT_TERM}")
+            logging.info(f"[Node {NODE_ID}] Rejecting vote request from {candidate_id} - I am already leader for term {CURRENT_TERM}")
             return jsonify({
                 'vote_granted': False,
                 'is_leader': True,
@@ -63,7 +84,7 @@ def vote():
         # Check if we're in the vote timeout period
         current_time = time.monotonic()
         if current_time - last_vote_time < VOTE_TIMEOUT and VOTED_FOR is not None:
-            print(f"[Node {NODE_ID}] Rejecting vote request from {candidate_id} - in voting timeout period ({current_time - last_vote_time:.1f}s < {VOTE_TIMEOUT}s)")
+            logging.info(f"[Node {NODE_ID}] Rejecting vote request from {candidate_id} - in voting timeout period ({current_time - last_vote_time:.1f}s < {VOTE_TIMEOUT}s)")
             return jsonify({
                 'vote_granted': False,
                 'is_leader': False,
@@ -81,19 +102,25 @@ def vote():
         # Only vote if we haven't voted in this term yet
         if VOTED_FOR is None and term >= CURRENT_TERM:
             VOTED_FOR = candidate_id
-            last_vote_time = current_time  # Record when we voted
-            last_heartbeat = current_time  # Reset heartbeat timer when voting
-            print(f"[Node {NODE_ID}] Voted for {candidate_id} in term {term}")
+            last_vote_time = current_time
+            last_heartbeat = current_time
+
+            if STATE != "follower":
+                STATE = "follower"
+                LEADER = None
+
+            logging.info(f"[Node {NODE_ID}] Voted for {candidate_id} in term {term}")
             return jsonify({
                 'vote_granted': True,
                 'is_leader': False
             })
+
         else:
             # We've already voted in this term
             if VOTED_FOR == candidate_id:
-                print(f"[Node {NODE_ID}] Already voted for {candidate_id} in term {term}")
+                logging.info(f"[Node {NODE_ID}] Already voted for {candidate_id} in term {term}")
             else:
-                print(f"[Node {NODE_ID}] Rejecting vote for {candidate_id}, already voted for {VOTED_FOR} in term {CURRENT_TERM}")
+                logging.info(f"[Node {NODE_ID}] Rejecting vote for {candidate_id}, already voted for {VOTED_FOR} in term {CURRENT_TERM}")
             
             return jsonify({
                 'vote_granted': False,
@@ -109,7 +136,6 @@ def heartbeat():
     data = request.get_json()
     term = data['term']
     leader_id = data['leader_id']
-
     with lock:
         if term >= CURRENT_TERM:
             # If we receive a heartbeat with valid term, accept the leader
@@ -118,7 +144,7 @@ def heartbeat():
             LEADER = leader_id
             VOTED_FOR = None  # Reset vote when we accept a leader
             last_heartbeat = time.monotonic()
-            print(f"[Node {NODE_ID}] Received heartbeat from Leader {leader_id} (term {term})")
+            logging.info(f"[Node {NODE_ID}] Received heartbeat from Leader {LEADER} (term {term})")
         return '', 200
 
 
@@ -136,7 +162,7 @@ def leader_announcement():
             LEADER = leader_id
             VOTED_FOR = None  # Reset vote
             last_heartbeat = time.monotonic()  # Reset heartbeat timer
-            print(f"[Node {NODE_ID}] Received leader announcement from {leader_id} for term {term}")
+            logging.info(f"[Node {NODE_ID}] Received leader announcement from {leader_id} for term {term}")
             return jsonify({'success': True})
         else:
             return jsonify({'success': False})
@@ -181,7 +207,7 @@ def election_loop():
                 term_started = CURRENT_TERM
                 votes = 1  # Vote for self first!
                 last_vote_time = now  # Reset vote timeout when starting election
-                print(f"[Node {NODE_ID}] Timeout. Starting election for term {CURRENT_TERM}")
+                logging.info(f"[Node {NODE_ID}] Timeout. Starting election for term {CURRENT_TERM}")
                 last_heartbeat = now
                 ELECTION_TIMEOUT = random.randint(5, 30)
 
@@ -208,7 +234,7 @@ def election_loop():
                             
                             with lock:
                                 if leader_term >= CURRENT_TERM:
-                                    print(f"[Node {NODE_ID}] Found existing leader {leader_id} for term {leader_term}, stepping down")
+                                    logging.info(f"[Node {NODE_ID}] Found existing leader {leader_id} for term {leader_term}, stepping down")
                                     STATE = "follower"
                                     CURRENT_TERM = leader_term
                                     LEADER = leader_id
@@ -225,10 +251,10 @@ def election_loop():
 
             # Check for majority
             with lock:
-                if STATE == "candidate" and CURRENT_TERM == term_started and votes > (TOTAL_NODES // 2):
+                if STATE == "candidate" and CURRENT_TERM == term_started and votes > (len(PEERS) // 2):
                     STATE = "leader"
                     LEADER = NODE_ID
-                    print(f"[Node {NODE_ID}] Won election for term {CURRENT_TERM} with {votes} votes.")
+                    logging.info(f"[Node {NODE_ID}] Won election for term {CURRENT_TERM} with {votes} votes.")
 
                     # Announce leadership to all peers
                     announce_leadership(CURRENT_TERM, NODE_ID)
@@ -237,7 +263,7 @@ def election_loop():
                     send_heartbeats(CURRENT_TERM, NODE_ID)
                 else:
                     if STATE == "candidate":
-                        print(f"[Node {NODE_ID}] Election failed. Votes: {votes}")
+                        logging.info(f"[Node {NODE_ID}] Election failed. Votes: {votes}")
                         # Return to follower state if election failed
                         STATE = "follower"
 
@@ -283,7 +309,7 @@ def heartbeat_loop():
 
 
 if __name__ == "__main__":
-    print(f"[Node {NODE_ID}] Starting Raft node on port {PORT}")
+    logging.info(f"[Node {NODE_ID}] Starting Raft node on port {PORT}")
     threading.Thread(target=election_loop, daemon=True).start()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     app.run(host='0.0.0.0', port=PORT)

@@ -7,6 +7,8 @@ services:
     environment:
       - NODE_ID=1
       - DBURL=https://raft-3d-printer-default-rtdb.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -16,6 +18,8 @@ services:
     environment:
       - NODE_ID=2
       - DBURL=https://raft-3d-printer-node2.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -25,6 +29,8 @@ services:
     environment:
       - NODE_ID=3
       - DBURL=https://raft-3d-printer-node3.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -34,6 +40,8 @@ services:
     environment:
       - NODE_ID=4
       - DBURL=https://raft-3d-printer-node4.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -43,6 +51,8 @@ services:
     environment:
       - NODE_ID=5
       - DBURL=https://raft-3d-printer-node5.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -52,6 +62,8 @@ services:
     environment:
       - NODE_ID=6
       - DBURL=https://raft-3d-printer-node6.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -61,6 +73,8 @@ services:
     environment:
       - NODE_ID=7
       - DBURL=https://raft-3d-printer-node7.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
@@ -70,6 +84,8 @@ services:
     environment:
       - NODE_ID=8
       - DBURL=https://raft-3d-printer-node8.asia-southeast1.firebasedatabase.app/
+    volumes:
+      - ./logs:/app/logs
     networks:
       - raft_net
 
