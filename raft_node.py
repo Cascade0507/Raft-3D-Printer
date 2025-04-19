@@ -39,7 +39,7 @@ logging.info(db)
 
 app = Flask(__name__)
 
-NODES = 4  # change to add more nodes
+NODES = 8  # change to add more nodes
 
 # Configuration
 TOTAL_NODES = 8
@@ -54,7 +54,7 @@ VOTED_FOR = None
 LEADER = None
 last_heartbeat = time.monotonic()
 last_vote_time = 0  # Track when we last voted
-VOTE_TIMEOUT = 15   # Don't vote again for 15 seconds after voting
+VOTE_TIMEOUT = 5   # Don't vote again for 15 seconds after voting
 lock = threading.Lock()
 
 logging.info(f"[Node {NODE_ID}] Peers: {PEERS}")
@@ -62,6 +62,10 @@ logging.info(f"[Node {NODE_ID}] Peers: {PEERS}")
 # Random election timeout (will change on each timeout)
 ELECTION_TIMEOUT = random.randint(5, 30)
 
+
+FOLLOWER_STATUS = {}  # Track status of all nodes (active/inactive)
+FOLLOWER_LAST_SEEN = {}  # Track when each follower was last seen
+FOLLOWER_TIMEOUT = 15  # 30 seconds timeout for follower inactivity
 
 @app.route('/vote', methods=['POST'])
 def vote():
@@ -72,7 +76,7 @@ def vote():
 
     with lock:
         # If this node is already a leader, inform the requester
-        if STATE == "leader" and CURRENT_TERM >= term:
+        if STATE == "leader" and CURRENT_TERM >= term - 1:
             logging.info(f"[Node {NODE_ID}] Rejecting vote request from {candidate_id} - I am already leader for term {CURRENT_TERM}")
             return jsonify({
                 'vote_granted': False,
@@ -139,14 +143,51 @@ def heartbeat():
 
     with lock:
         if term >= CURRENT_TERM:
-            # If we receive a heartbeat with valid term, accept the leader
+            # Accept leader and update state
             CURRENT_TERM = term
             STATE = "follower"
             LEADER = leader_id
-            VOTED_FOR = None  # Reset vote when we accept a leader
+            VOTED_FOR = None
             last_heartbeat = time.monotonic()
             logging.info(f"[Node {NODE_ID}] Received heartbeat from Leader {leader_id} (term {term})")
+
+        # Send acknowledgment back to leader
+        try:
+            leader_url = f"http://raft_node_{leader_id}:{PORT}/heartbeat_response"
+            requests.post(leader_url, json={
+                "follower_id": NODE_ID,
+                "term": term
+            }, timeout=1)
+        except requests.RequestException as e:
+            logging.warning(f"[Node {NODE_ID}] Failed to send heartbeat response to leader {leader_id}: {e}")
+
         return '', 200
+
+
+@app.route('/heartbeat_response', methods=['POST'])
+def heartbeat_response():
+    global FOLLOWER_STATUS, FOLLOWER_LAST_SEEN
+    data = request.get_json()
+    follower_id = data.get('follower_id')
+    term = data.get('term')
+    
+    if STATE == "leader" and term == CURRENT_TERM:
+        current_time = time.monotonic()
+        
+        # Check if this follower was previously marked inactive
+        was_inactive = FOLLOWER_STATUS.get(follower_id) == "inactive"
+        
+        # Update status and last seen time
+        FOLLOWER_STATUS[follower_id] = "active"
+        FOLLOWER_LAST_SEEN[follower_id] = current_time
+        
+        # Log recovery if previously inactive
+        if was_inactive:
+            logging.info(f"[Node {NODE_ID}] Follower {follower_id} has recovered and is now active")
+        else:
+            logging.info(f"[Node {NODE_ID}] Received heartbeat response from follower {follower_id}")
+            
+    return '', 200
 
 
 @app.route('/leader_announcement', methods=['POST'])
@@ -178,6 +219,15 @@ def status():
             'term': CURRENT_TERM,
             'leader': LEADER,
             'voted_for': VOTED_FOR
+        })
+
+@app.route('/cluster_status', methods=['GET'])
+def cluster_status():
+    with lock:
+        return jsonify({
+            'leader': LEADER,
+            'current_term': CURRENT_TERM,
+            'node_statuses': FOLLOWER_STATUS
         })
 
 
@@ -212,17 +262,26 @@ def election_loop():
                 last_heartbeat = now
                 ELECTION_TIMEOUT = random.randint(5, 30)
 
-            # Send vote requests
-            for peer in PEERS:
+            # Create a list to store vote request threads
+            vote_threads = []
+            # Create a shared votes counter that threads can increment
+            vote_counter = {'count': 1}  # Start with 1 (self vote)
+            vote_counter_lock = threading.Lock()
+            
+            # Function for vote request worker threads
+            def request_vote(peer, term, node_id, counter, counter_lock):
+                # Properly declare globals inside the function
+                global STATE, CURRENT_TERM, LEADER, VOTED_FOR, last_heartbeat
+                
                 # Skip if we're no longer a candidate
                 with lock:
                     if STATE != "candidate":
-                        break
-                        
+                        return
+                    
                 try:
                     resp = requests.post(f"{peer}/vote", json={
-                        "term": term_started,
-                        "candidate_id": NODE_ID
+                        "term": term,
+                        "candidate_id": node_id
                     }, timeout=1)
                     
                     if resp.status_code == 200:
@@ -241,21 +300,43 @@ def election_loop():
                                     LEADER = leader_id
                                     VOTED_FOR = None
                                     last_heartbeat = time.monotonic()
-                                    break  # Exit vote collection loop
+
                         
                         # If we got a vote, count it
                         elif response_data.get("vote_granted"):
-                            votes += 1
+                            with counter_lock:
+                                counter['count'] += 1
+                                logging.info(f"[Node {NODE_ID}] Received vote from peer at {peer}, total votes: {counter['count']}")
                             
-                except requests.RequestException:
-                    continue
+                except requests.RequestException as e:
+                    logging.debug(f"[Node {NODE_ID}] Failed to get vote from {peer}: {e}")
+            
+            # Start a thread for each peer vote request
+            for peer in PEERS:
+                vote_thread = threading.Thread(
+                    target=request_vote,
+                    args=(peer, term_started, NODE_ID, vote_counter, vote_counter_lock),
+                    daemon=True
+                )
+                vote_thread.start()
+                vote_threads.append(vote_thread)
+            
+            # Wait for all vote requests to complete (with timeout)
+            vote_collection_timeout = min(3, ELECTION_TIMEOUT / 2)  # Don't wait too long
+            start_time = time.monotonic()
+            for thread in vote_threads:
+                remaining_time = max(0, vote_collection_timeout - (time.monotonic() - start_time))
+                thread.join(timeout=remaining_time)
+                if time.monotonic() - start_time >= vote_collection_timeout:
+                    logging.info(f"[Node {NODE_ID}] Vote collection timed out after {vote_collection_timeout}s")
+                    break
 
             # Check for majority
             with lock:
-                if STATE == "candidate" and CURRENT_TERM == term_started and votes > (TOTAL_NODES // 2):
+                if STATE == "candidate" and CURRENT_TERM == term_started and vote_counter['count'] > (TOTAL_NODES // 2):
                     STATE = "leader"
                     LEADER = NODE_ID
-                    logging.info(f"[Node {NODE_ID}] Won election for term {CURRENT_TERM} with {votes} votes.")
+                    logging.info(f"[Node {NODE_ID}] Won election for term {CURRENT_TERM} with {vote_counter['count']} votes.")
 
                     # Announce leadership to all peers
                     announce_leadership(CURRENT_TERM, NODE_ID)
@@ -264,10 +345,9 @@ def election_loop():
                     send_heartbeats(CURRENT_TERM, NODE_ID)
                 else:
                     if STATE == "candidate":
-                        logging.info(f"[Node {NODE_ID}] Election failed. Votes: {votes}")
+                        logging.info(f"[Node {NODE_ID}] Election failed. Votes: {vote_counter['count']}")
                         # Return to follower state if election failed
                         STATE = "follower"
-
 
 def announce_leadership(term, leader_id):
     """Announce leadership to all peers when elected"""
@@ -282,35 +362,110 @@ def announce_leadership(term, leader_id):
 
 
 def send_heartbeats(term, leader_id):
-    """Send immediate heartbeats to all peers"""
-    for peer in PEERS:
+    """Send immediate heartbeats to all peers asynchronously"""
+    heartbeat_threads = []
+    
+    def send_single_heartbeat(peer, current_term, current_leader_id):
         try:
             requests.post(f"{peer}/heartbeat", json={
-                "term": term,
-                "leader_id": leader_id
+                "term": current_term,
+                "leader_id": current_leader_id
             }, timeout=1)
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            logging.debug(f"[Node {NODE_ID}] Failed to send heartbeat to {peer}: {e}")
+    
+    # Send multiple rounds of heartbeats in quick succession
+    for _ in range(3):  # Send 3 rounds of heartbeats
+        threads_round = []
+        for peer in PEERS:
+            # Create and start a thread for each peer
+            heartbeat_thread = threading.Thread(
+                target=send_single_heartbeat,
+                args=(peer, term, leader_id),
+                daemon=True
+            )
+            heartbeat_thread.start()
+            threads_round.append(heartbeat_thread)
+        
+        # Wait for all threads in this round to complete (with timeout)
+        for thread in threads_round:
+            thread.join(timeout=0.5)
+        
+        # Brief pause between rounds
+        time.sleep(0.2)
 
 
 def heartbeat_loop():
+    """Periodically send heartbeats to all followers if this node is the leader"""
     global CURRENT_TERM
     while True:
         time.sleep(2)
         with lock:
             if STATE == "leader":
-                for peer in PEERS:
-                    try:
-                        requests.post(f"{peer}/heartbeat", json={
-                            "term": CURRENT_TERM,
-                            "leader_id": NODE_ID
-                        }, timeout=1)
-                    except requests.RequestException:
-                        pass
+                current_term = CURRENT_TERM
+                current_id = NODE_ID
+        
+        # Only proceed if we're the leader
+        if STATE == "leader":
+            heartbeat_threads = []
+            
+            def send_heartbeat_to_peer(peer, term, leader_id):
+                try:
+                    requests.post(f"{peer}/heartbeat", json={
+                        "term": term,
+                        "leader_id": leader_id
+                    }, timeout=1)
+                except requests.RequestException as e:
+                    logging.debug(f"[Node {NODE_ID}] Failed to send heartbeat to {peer}: {e}")
+            
+            # Create and start a thread for each peer
+            for peer in PEERS:
+                heartbeat_thread = threading.Thread(
+                    target=send_heartbeat_to_peer, 
+                    args=(peer, current_term, current_id),
+                    daemon=True
+                )
+                heartbeat_thread.start()
+                heartbeat_threads.append(heartbeat_thread)
+            
+            # Optional: Wait for heartbeats to complete (with timeout)
+            # This prevents heartbeat_loop from sending new heartbeats before previous ones finish
+            for thread in heartbeat_threads:
+                thread.join(timeout=1.0)  # Don't wait more than 1 second
+
+
+def check_follower_status():
+    """Periodically check if followers have timed out"""
+    global FOLLOWER_STATUS, FOLLOWER_LAST_SEEN
+    
+    while True:
+        time.sleep(5)  # Check every 5 seconds
+        
+        # Only relevant when we're the leader
+        with lock:
+            if STATE != "leader":
+                continue
+                
+            current_time = time.monotonic()
+            
+            # Check each follower's status
+            for node_id in range(1, TOTAL_NODES + 1):
+                if node_id == NODE_ID:  # Skip self
+                    continue
+                    
+                last_seen = FOLLOWER_LAST_SEEN.get(node_id, 0)
+                time_since_last_seen = current_time - last_seen
+                
+                # Mark as inactive if timeout exceeded
+                if time_since_last_seen > FOLLOWER_TIMEOUT:
+                    if FOLLOWER_STATUS.get(node_id) != "inactive":
+                        FOLLOWER_STATUS[node_id] = "inactive"
+                        logging.warning(f"[Node {NODE_ID}] Follower {node_id} is inactive (no response for {time_since_last_seen:.1f}s)")
 
 
 if __name__ == "__main__":
     logging.info(f"[Node {NODE_ID}] Starting Raft node on port {PORT}")
     threading.Thread(target=election_loop, daemon=True).start()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
+    threading.Thread(target=check_follower_status, daemon=True).start()  # Add this line
     app.run(host='0.0.0.0', port=PORT)

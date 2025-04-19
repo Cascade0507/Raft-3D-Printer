@@ -11,6 +11,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5001:5000"
 
   raft_node_2:
     build: .
@@ -22,6 +24,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+      - "5002:5000"
 
   raft_node_3:
     build: .
@@ -33,6 +37,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5003:5000"
 
   raft_node_4:
     build: .
@@ -44,6 +50,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5004:5000"
 
   raft_node_5:
     build: .
@@ -55,6 +63,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5005:5000"
 
   raft_node_6:
     build: .
@@ -66,6 +76,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5006:5000"
 
   raft_node_7:
     build: .
@@ -77,6 +89,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5007:5000"
 
   raft_node_8:
     build: .
@@ -88,6 +102,8 @@ services:
       - ./logs:/app/logs
     networks:
       - raft_net
+    ports:
+    - "5008:5000"
 
 networks:
   raft_net:
