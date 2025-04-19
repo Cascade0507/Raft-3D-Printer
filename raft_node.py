@@ -69,7 +69,7 @@ def vote():
     data = request.get_json()
     term = data['term']
     candidate_id = data['candidate_id']
-    print(PEERS)
+
     with lock:
         # If this node is already a leader, inform the requester
         if STATE == "leader" and CURRENT_TERM >= term:
@@ -136,6 +136,7 @@ def heartbeat():
     data = request.get_json()
     term = data['term']
     leader_id = data['leader_id']
+
     with lock:
         if term >= CURRENT_TERM:
             # If we receive a heartbeat with valid term, accept the leader
@@ -144,7 +145,7 @@ def heartbeat():
             LEADER = leader_id
             VOTED_FOR = None  # Reset vote when we accept a leader
             last_heartbeat = time.monotonic()
-            logging.info(f"[Node {NODE_ID}] Received heartbeat from Leader {LEADER} (term {term})")
+            logging.info(f"[Node {NODE_ID}] Received heartbeat from Leader {leader_id} (term {term})")
         return '', 200
 
 
@@ -251,7 +252,7 @@ def election_loop():
 
             # Check for majority
             with lock:
-                if STATE == "candidate" and CURRENT_TERM == term_started and votes > (len(PEERS) // 2):
+                if STATE == "candidate" and CURRENT_TERM == term_started and votes > (TOTAL_NODES // 2):
                     STATE = "leader"
                     LEADER = NODE_ID
                     logging.info(f"[Node {NODE_ID}] Won election for term {CURRENT_TERM} with {votes} votes.")
