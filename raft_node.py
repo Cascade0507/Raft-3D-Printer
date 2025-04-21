@@ -210,7 +210,7 @@ def leader_announcement():
             return jsonify({'success': False})
 
 
-@app.route('/status', methods=['GET'])
+@app.route('/node_status', methods=['GET'])
 def status():
     with lock:
         return jsonify({
@@ -229,6 +229,219 @@ def cluster_status():
             'current_term': CURRENT_TERM,
             'node_statuses': FOLLOWER_STATUS
         })
+    
+@app.route('/printer', methods=['POST'])
+def create_printer():
+    data = request.get_json()
+    printer_id = str(data.get("id"))
+
+    if not printer_id:
+        return jsonify({"error": "Printer ID is required"}), 400
+
+    try:
+        db.reference(f"printers/{printer_id}").set({
+            "id": printer_id,
+            "company": data.get("company"),
+            "model": data.get("model")
+        })
+        logging.info(f"[Node {NODE_ID}] Created printer {printer_id}")
+        return jsonify({"success": True}), 201
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to create printer: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/filament', methods=['POST'])
+def create_filament():
+    data = request.get_json()
+    filament_id = str(data.get("id"))
+
+    if not filament_id:
+        return jsonify({"error": "Filament ID is required"}), 400
+
+    try:
+        db.reference(f"filaments/{filament_id}").set({
+            "id": filament_id,
+            "type": data.get("type"),
+            "color": data.get("color"),
+            "total_weight_in_grams": data.get("total_weight_in_grams"),
+            "remaining_weight_in_grams": data.get("remaining_weight_in_grams")
+        })
+        logging.info(f"[Node {NODE_ID}] Created filament {filament_id}")
+        return jsonify({"success": True}), 201
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to create filament: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/printjob', methods=['POST'])
+def create_print_job():
+    data = request.get_json()
+    job_id = str(data.get("id"))
+
+    if not job_id:
+        return jsonify({"error": "Job ID is required"}), 400
+
+    try:
+        db.reference(f"print_jobs/{job_id}").set({
+            "id": job_id,
+            "printer_id": data.get("printer_id"),
+            "filament_id": data.get("filament_id"),
+            "filepath": data.get("filepath"),
+            "print_weight_in_grams": data.get("print_weight_in_grams"),
+            "status": data.get("status")
+        })
+        logging.info(f"[Node {NODE_ID}] Created print job {job_id}")
+        return jsonify({"success": True}), 201
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to create print job: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/printer/<printer_id>', methods=['GET'])
+def get_printer(printer_id):
+    try:
+        printer_data = db.reference(f"printers/{printer_id}").get()
+        if printer_data:
+            return jsonify(printer_data)
+        else:
+            return jsonify({"error": "Printer not found"}), 404
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to fetch printer: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/filament/<filament_id>', methods=['GET'])
+def get_filament(filament_id):
+    try:
+        filament_data = db.reference(f"filaments/{filament_id}").get()
+        if filament_data:
+            return jsonify(filament_data)
+        else:
+            return jsonify({"error": "Filament not found"}), 404
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to fetch filament: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/printjob/<job_id>', methods=['GET'])
+def get_print_job(job_id):
+    try:
+        job_data = db.reference(f"print_jobs/{job_id}").get()
+        if job_data:
+            return jsonify(job_data)
+        else:
+            return jsonify({"error": "Print job not found"}), 404
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to retrieve print job: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/status', methods=['POST'])
+def update_print_job_status_post():
+    data = request.get_json()
+    job_id = str(data.get("job_id"))
+    status = data.get("status")
+
+    if not job_id or not status:
+        return jsonify({"error": "job_id and status are required"}), 400
+
+    job_ref = db.reference(f"print_jobs/{job_id}")
+    if not job_ref.get():
+        return jsonify({"error": "Print job not found"}), 404
+
+    try:
+        job_ref.update({"status": status})
+        logging.info(f"[Node {NODE_ID}] Updated print job {job_id} status to {status}")
+        return jsonify({"success": True})
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to update print job status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+#CONSENSUS
+
+@app.route('/initiate_write', methods=['POST'])
+def initiate_write():
+    if STATE != "leader":
+        return jsonify({"error": "Only leader can initiate write"}), 403
+
+    payload = request.get_json()
+    write_type = payload.get("type")
+    data = payload.get("data")
+    write_id = str(data.get("id"))
+
+    if not write_type or not data or not write_id:
+        return jsonify({"error": "Invalid request"}), 400
+
+    # Send write_ready to all followers asynchronously
+    ack_count = 1  # self
+    ack_lock = threading.Lock()
+    write_threads = []
+
+    def send_ready_request(peer_url):
+        nonlocal ack_count
+        try:
+            res = requests.post(f"{peer_url}/ready_check", json={"type": write_type, "id": write_id}, timeout=1)
+            if res.status_code == 200 and res.json().get("status") == "ready":
+                with ack_lock:
+                    ack_count += 1
+        except Exception as e:
+            logging.warning(f"[Node {NODE_ID}] Failed to get ready from {peer_url}: {e}")
+
+    for peer in PEERS:
+        thread = threading.Thread(target=send_ready_request, args=(peer,), daemon=True)
+        thread.start()
+        write_threads.append(thread)
+
+    # Wait for replies
+    for t in write_threads:
+        t.join(timeout=1)
+
+    # Check quorum
+    if ack_count > TOTAL_NODES // 2:
+        logging.info(f"[Node {NODE_ID}] Got majority ready ({ack_count}), committing write {write_id}")
+        
+        # Commit locally using Firebase
+        db.reference(f"{write_type}s/{write_id}").set(data)
+
+        # Notify all followers to commit
+        def send_commit(peer_url):
+            try:
+                requests.post(f"{peer_url}/commit_write", json={
+                    "type": write_type,
+                    "data": data
+                }, timeout=1)
+            except Exception as e:
+                logging.warning(f"[Node {NODE_ID}] Failed to send commit to {peer_url}: {e}")
+
+        for peer in PEERS:
+            threading.Thread(target=send_commit, args=(peer,), daemon=True).start()
+
+        return jsonify({"success": True, "committed": True}), 200
+    else:
+        logging.warning(f"[Node {NODE_ID}] Not enough ready responses ({ack_count}), aborting write")
+        return jsonify({"success": False, "committed": False, "acks": ack_count}), 500
+
+@app.route('/ready_check', methods=['POST'])
+def ready_check():
+    data = request.get_json()
+    logging.info(f"[Node {NODE_ID}] Received ready check for write: {data}")
+    return jsonify({"status": "ready"}), 200
+
+
+@app.route('/commit_write', methods=['POST'])
+def commit_write():
+    data = request.get_json()
+    write_type = data.get("type")
+    obj_data = data.get("data")
+    obj_id = str(obj_data.get("id"))
+
+    if not write_type or not obj_id or not obj_data:
+        return jsonify({"error": "Invalid commit data"}), 400
+
+    try:
+        db.reference(f"{write_type}s/{obj_id}").set(obj_data)
+        logging.info(f"[Node {NODE_ID}] Committed {write_type} {obj_id} from leader")
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        logging.error(f"[Node {NODE_ID}] Failed to commit {write_type}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 def election_loop():
@@ -468,4 +681,4 @@ if __name__ == "__main__":
     threading.Thread(target=election_loop, daemon=True).start()
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     threading.Thread(target=check_follower_status, daemon=True).start()  # Add this line
-    app.run(host='0.0.0.0', port=PORT)
+    app.run(host='0.0.0.0', port=PORT)  
