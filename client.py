@@ -1,9 +1,35 @@
 import json
 import requests
 import time
-from client_connector import get_alive_nodes, load_node_status, save_node_status
+from pathlib import Path
+import os
+# from client_connector import get_alive_nodes, load_node_status, save_node_status
 
 STATUS_FILE = "node_status.json"
+LOG_DIR = "logs"
+STATUS_FILE = "node_status.json"
+TOTAL_NODES = 8
+
+def get_alive_nodes():
+    alive_nodes = set()
+    print("searching")
+    for log_file in Path(LOG_DIR).glob("raft_node_*.log"):
+        with open(log_file, "r") as f:
+            content = f.read()
+            if "Starting Raft node on port" in content and "Running on http://" in content:
+                node_id = int(log_file.name.split("_")[-1].split(".")[0])
+                alive_nodes.add(node_id)
+    return alive_nodes
+
+def load_node_status():
+    if not os.path.exists(STATUS_FILE):
+        return {str(i): "available" for i in range(1, TOTAL_NODES + 1)}
+    with open(STATUS_FILE, "r") as f:
+        return json.load(f)
+
+def save_node_status(status):
+    with open(STATUS_FILE, "w") as f:
+        json.dump(status, f, indent=4)
 
 def get_available_node():
     alive = get_alive_nodes()
@@ -55,12 +81,11 @@ def run_client(client_id):
 
 
 
-
-
 node_id = get_available_node()
+print(node_id)
 response = requests.get(f"http://raft_node_{node_id}:5000/cluster_status")
 leader = response.json()['leader']
-
+print(leader)
 
 def create_printer():
     printer_id = input("enter printer id: ")
@@ -72,7 +97,7 @@ def create_printer():
         "model": model
     }
     write = {"type":"printer","data":data}
-    response = requests.post(f"http://raft_node_{leader}:5000/initiate_write",data = json.dumps(write))
+    response = requests.post(f"http://raft_node_{leader}:5000/initiate_write",json = write)
     print(response)
 
 def create_filament():
@@ -89,7 +114,7 @@ def create_filament():
         "remaining_weight": rem_weight
     }
     write = {"type":"filament","data":data}
-    response = requests.post(f"http://raft_node_{leader}:5000/initiate_write",data = json.dumps(write))
+    response = requests.post(f"http://raft_node_{leader}:5000/initiate_write",json = write)
     print(response)
 
 def create_print_job():
@@ -108,7 +133,7 @@ def create_print_job():
         "status": "Queued"
     }
     write = {"type":"print_job","data":data}
-    response = requests.post(f"http://raft_node_{leader}:5000/initiate_write",data = json.dumps(write))
+    response = requests.post(f"http://raft_node_{leader}:5000/initiate_write",json = write)
     print(response.json())
 
 

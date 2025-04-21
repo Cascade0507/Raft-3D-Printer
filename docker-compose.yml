@@ -105,5 +105,17 @@ services:
     ports:
     - "5008:5000"
 
+  client:
+      build: .
+      container_name: client
+      volumes:
+        - ./node_status.json:/app/node_status.json
+        - ./logs:/app/logs
+      networks:
+        - raft_net
+      stdin_open: true
+      tty: true
+      entrypoint: ["/bin/bash"]
+
 networks:
   raft_net:
